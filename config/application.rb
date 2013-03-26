@@ -2,61 +2,92 @@ require File.expand_path('../boot', __FILE__)
 
 require 'rails/all'
 
-if defined?(Bundler)
-  # If you precompile assets before deploying to production, use this line
-  Bundler.require(*Rails.groups(:assets => %w(development test)))
-  # If you want your assets lazily compiled in production, use this line
-  # Bundler.require(:default, :assets, Rails.env)
-end
+# Auto-require default libraries and those for the current Rails environment.
+Bundler.require :default, Rails.env
 
-module Stblog
+module TypoBlog
   class Application < Rails::Application
     # Settings in config/environments/* take precedence over those specified here.
     # Application configuration should go into files in config/initializers
     # -- all .rb files in that directory are automatically loaded.
 
-    # Custom directories with classes and modules you want to be autoloadable.
-    # config.autoload_paths += %W(#{config.root}/extras)
+    # Setup the cache path
+    config.action_controller.page_cache_directory = "#{::Rails.root.to_s}/public/cache/"
+    config.cache_store=:file_store, "#{::Rails.root.to_s}/public/cache/"
 
-    # Only load the plugins named here, in the order given (default is alphabetical).
-    # :all can be used as a placeholder for all plugins not explicitly named.
-    # config.plugins = [ :exception_notification, :ssl_requirement, :all ]
+    # I need the localization plugin to load first
+    # Otherwise, I can't localize plugins <= localization
+    config.plugins = [ :localization, :all ]
 
-    # Activate observers that should always be running.
-    # config.active_record.observers = :cacher, :garbage_collector, :forum_observer
+    config.autoload_paths += %W(
+      app/apis
+    ).map {|dir| "#{::Rails.root.to_s}/#{dir}"}.select { |dir| File.directory?(dir) }
 
-    # Set Time.zone default to the specified zone and make Active Record auto-convert to this zone.
-    # Run "rake -D time" for a list of tasks for finding time zone names. Default is UTC.
-    # config.time_zone = 'Central Time (US & Canada)'
+    # Activate observers that should always be running
+    config.active_record.observers = :email_notifier, :web_notifier
 
-    # The default locale is :en and all translations from config/locales/*.rb,yml are auto loaded.
-    # config.i18n.load_path += Dir[Rails.root.join('my', 'locales', '*.{rb,yml}').to_s]
-    # config.i18n.default_locale = :de
+    # Turn om timestamped migrations
+    config.active_record.timestamped_migrations = true
 
-    # Configure the default encoding used in templates for Ruby 1.9.
-    config.encoding = "utf-8"
+    # Filter sensitive parameters from the log file
+    config.filter_parameters << :password
 
-    # Configure sensitive parameters which will be filtered from the log file.
-    config.filter_parameters += [:password]
+    # To avoid exception when deploying on Heroku
+    config.assets.initialize_on_precompile = false
+  end
 
-    # Enable escaping HTML in JSON.
-    config.active_support.escape_html_entities_in_json = true
+  # Load included libraries.
 
-    # Use SQL instead of Active Record's schema dumper when creating the database.
-    # This is necessary if your schema can't be completely dumped by the schema dumper,
-    # like if you have constraints or database-specific column types
-    # config.active_record.schema_format = :sql
+  require 'action_web_service'
+  ## Required by the plugins themselves.
+  # require 'avatar_plugin'
+  require 'email_notify'
 
-    # Enforce whitelist mode for mass assignment.
-    # This will create an empty whitelist of attributes available for mass-assignment for all models
-    # in your app. As such, your models will need to explicitly whitelist or blacklist accessible
-    # parameters by using an attr_accessible or attr_protected declaration.
-    config.active_record.whitelist_attributes = true
+  $FM_OVERWRITE = true
+  require 'filemanager'
 
-    # Enable the asset pipeline
-    config.assets.enabled = true
+  require 'format'
+  require 'i18n_interpolation_deprecation'
+  require 'migrator'
+  require 'route_cache'
+  ## Required by the models themselves.
+  # require 'spam_protection'
+  require 'stateful'
+  require 'transforms'
+  require 'typo_guid'
+  ## Required by the plugins themselves.
+  # require 'typo_plugins'
+  require 'bare_migration'
+  require 'typo_version'
+  require 'rails_patch/active_support'
 
-    # Version of your assets, change this if you want to expire all your assets
-    config.assets.version = '1.0'
+  require "#{Rails.root.to_s}/vendor/plugins/typo_login_system/lib/login_system"
+  require "#{Rails.root.to_s}/vendor/akismet/akismet"
+
+  Date::DATE_FORMATS.merge!(
+    :long_weekday => '%a %B %e, %Y %H:%M'
+  )
+
+  ActionMailer::Base.default :charset => 'utf-8'
+
+  # Work around interpolation deprecation problem: %d is replaced by
+  # {{count}}, even when we don't want them to.
+  # FIXME: We should probably fully convert to standard Rails I18n.
+  class I18n::Backend::Simple
+    def interpolate(locale, string, values = {})
+      interpolate_without_deprecated_syntax(locale, string, values)
+    end
+  end
+
+  if ::Rails.env != 'test'
+    begin
+      mail_settings = YAML.load(File.read("#{::Rails.root.to_s}/config/mail.yml"))
+
+      ActionMailer::Base.delivery_method = mail_settings['method']
+      ActionMailer::Base.server_settings = mail_settings['settings']
+    rescue
+      # Fall back to using sendmail by default
+      ActionMailer::Base.delivery_method = :sendmail
+    end
   end
 end
